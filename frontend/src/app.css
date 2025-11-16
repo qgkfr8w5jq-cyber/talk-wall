@@ -1,0 +1,369 @@
+:root {
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  color: #111;
+  background-color: #f7f7fb;
+  line-height: 1.5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: radial-gradient(circle at top, #fdfbff, #f2f4ff 65%, #eff3ff);
+}
+
+button {
+  font: inherit;
+}
+
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+main {
+  min-height: 100vh;
+}
+
+.auth-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+
+.auth-card {
+  width: min(440px, 100%);
+  padding: 2.5rem;
+  border-radius: 24px;
+  background: #fff;
+  box-shadow: 0 20px 80px rgba(15, 30, 84, 0.15);
+}
+
+.auth-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  background: #f1f3ff;
+  padding: 0.35rem;
+  border-radius: 999px;
+  margin-bottom: 2rem;
+}
+
+.auth-tabs button {
+  border: none;
+  background: transparent;
+  padding: 0.6rem 0;
+  border-radius: 999px;
+  font-weight: 600;
+  cursor: pointer;
+  color: #5c5f82;
+}
+
+.auth-tabs button.active {
+  background: #fff;
+  color: #111538;
+  box-shadow: 0 8px 20px rgba(92, 95, 130, 0.15);
+}
+
+.form-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.input-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.input-field label {
+  font-size: 0.9rem;
+  color: #6c6f8c;
+}
+
+.input-field input,
+.input-field textarea,
+select,
+textarea {
+  border-radius: 12px;
+  border: 1px solid #dcdff1;
+  padding: 0.85rem 1rem;
+  background: #fff;
+}
+
+.primary-btn {
+  background: linear-gradient(120deg, #5c67ff, #4fc4ff);
+  color: #fff;
+  border: none;
+  border-radius: 14px;
+  padding: 0.85rem 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.2s ease;
+}
+
+.primary-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.primary-btn:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 15px 40px rgba(92, 103, 255, 0.25);
+}
+
+.main-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 2rem;
+  backdrop-filter: blur(16px);
+  background: rgba(255, 255, 255, 0.85);
+  border-bottom: 1px solid rgba(162, 170, 220, 0.2);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.top-left {
+  display: flex;
+  gap: 0.8rem;
+}
+
+.tab-pill {
+  border-radius: 999px;
+  padding: 0.45rem 1.2rem;
+  border: none;
+  background: transparent;
+  font-weight: 600;
+  color: #6a6f9d;
+  cursor: pointer;
+}
+
+.tab-pill.active {
+  background: rgba(92, 103, 255, 0.15);
+  color: #313469;
+}
+
+.tab-pill:hover:not(.active) {
+  background: rgba(92, 103, 255, 0.07);
+}
+
+.content-area {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 1.5rem;
+  padding: 1.5rem 2rem 3rem;
+}
+
+@media (max-width: 1200px) {
+  .content-area {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.post-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.post-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1.2rem;
+}
+
+.post-card {
+  border-radius: 20px;
+  padding: 1.25rem;
+  background: #fff;
+  box-shadow: 0 12px 40px rgba(15, 30, 84, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: border-color 0.2s ease, transform 0.15s ease;
+}
+
+.post-card:hover {
+  border-color: #5f6bff33;
+  transform: translateY(-2px);
+}
+
+.category-chip {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.1rem 0.7rem;
+  border-radius: 999px;
+  background: rgba(95, 107, 255, 0.12);
+  color: #4d4fb2;
+  align-self: flex-start;
+}
+
+.post-card h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.post-card p {
+  margin: 0;
+  color: #555975;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.board-picker {
+  border-radius: 999px;
+  border: 1px solid #dfe2fb;
+  padding: 0.55rem 1.2rem;
+  background: #fff;
+}
+
+.secondary-btn {
+  border-radius: 999px;
+  border: 1px solid #dfe2fb;
+  padding: 0.55rem 1.2rem;
+  background: #fff;
+  cursor: pointer;
+}
+
+.drawer {
+  position: fixed;
+  inset: 0;
+  background: rgba(7, 12, 42, 0.45);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 2rem;
+  z-index: 30;
+}
+
+.drawer-panel {
+  width: min(900px, 100%);
+  max-height: 95vh;
+  border-radius: 24px;
+  background: #fff;
+  padding: 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+}
+
+.drawer-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.comment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.comment-item {
+  padding: 1rem;
+  border-radius: 16px;
+  background: #f6f7ff;
+}
+
+.profile-panel {
+  background: #fff;
+  border-radius: 24px;
+  padding: 1.5rem;
+  box-shadow: 0 12px 40px rgba(15, 30, 84, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.profile-panel h2 {
+  margin: 0;
+}
+
+.profile-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.profile-section ul {
+  padding-left: 1.2rem;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.inline-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.error-text {
+  color: #d7263d;
+  font-size: 0.9rem;
+}
+
+.success-text {
+  color: #0a8754;
+  font-size: 0.9rem;
+}
+
+.public-profile {
+  position: fixed;
+  inset: 0;
+  background: rgba(7, 12, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  z-index: 40;
+}
+
+.public-profile-card {
+  width: min(460px, 100%);
+  background: #fff;
+  border-radius: 22px;
+  padding: 1.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.public-profile-card h3 {
+  margin: 0;
+}
+
+.public-profile-card ul {
+  padding-left: 1rem;
+}
+
+small {
+  color: #7b7fa6;
+}
+
+textarea {
+  resize: vertical;
+}
