@@ -175,6 +175,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_state(state.clone());
 
     let app = api_routes
+    let app = Router::new()
+        .merge(api_routes)
         .layer(CookieManagerLayer::new())
         .fallback_service(static_service);
 
