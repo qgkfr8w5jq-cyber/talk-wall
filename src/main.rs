@@ -13,6 +13,7 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
+use axum_extra::extract::cookie::{Cookie, CookieJar, CookieLayer};
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, SqlitePool};
@@ -235,6 +236,9 @@ async fn register(
 
 async fn login(
     State(state): State<SharedState>,
+    jar: CookieJar,
+    Json(payload): Json<LoginPayload>,
+) -> ApiResult<(CookieJar, Json<UserResponse>)> {
     cookies: Cookies,
     Json(payload): Json<LoginPayload>,
 ) -> ApiResult<Json<UserResponse>> {
@@ -269,6 +273,20 @@ async fn login(
     cookie.set_http_only(true);
     cookie.set_path("/");
     cookie.set_max_age(Duration::days(SESSION_TTL_DAYS));
+    let jar = jar.add(cookie);
+
+    let is_admin = state.config.is_admin(&user.uid);
+
+    Ok((
+        jar,
+        Json(UserResponse {
+            id: user.id,
+            username: user.username,
+            qq: user.qq,
+            uid: user.uid,
+            is_admin,
+        }),
+    ))
     cookies.add(cookie);
 
     let is_admin = state.config.is_admin(&user.uid);
@@ -284,6 +302,10 @@ async fn login(
 
 async fn logout(
     State(state): State<SharedState>,
+    jar: CookieJar,
+) -> ApiResult<(CookieJar, Json<MessageResponse>)> {
+    let mut jar = jar;
+    if let Some(cookie) = jar.get(SESSION_COOKIE) {
     cookies: Cookies,
 ) -> ApiResult<impl IntoResponse> {
     if let Some(cookie) = cookies.get(SESSION_COOKIE) {
@@ -295,6 +317,19 @@ async fn logout(
 
         let mut expired = Cookie::named(SESSION_COOKIE.to_string());
         expired.set_path("/");
+        jar = jar.remove(expired);
+    }
+
+    Ok((
+        jar,
+        Json(MessageResponse {
+            message: "退出成功".into(),
+        }),
+    ))
+}
+
+async fn me(State(state): State<SharedState>, jar: CookieJar) -> ApiResult<Json<UserResponse>> {
+    let user = authenticate(&state, &jar).await?;
         cookies.remove(expired);
     }
 
@@ -317,6 +352,7 @@ async fn me(State(state): State<SharedState>, cookies: Cookies) -> ApiResult<Jso
 
 async fn create_post(
     State(state): State<SharedState>,
+    jar: CookieJar,
     cookies: Cookies,
     Json(payload): Json<CreatePostPayload>,
 ) -> ApiResult<impl IntoResponse> {
@@ -327,6 +363,7 @@ async fn create_post(
         return Err(ApiError::Validation("内容不能为空".into()));
     }
 
+    let user = authenticate(&state, &jar).await?;
     let user = authenticate(&state, &cookies).await?;
     let now = now_iso();
     let anonymous = payload.anonymous.unwrap_or(false);
@@ -355,6 +392,10 @@ async fn create_post(
 
 async fn list_posts(
     State(state): State<SharedState>,
+    jar: CookieJar,
+    Query(query): Query<PostListQuery>,
+) -> ApiResult<Json<Vec<PostSummary>>> {
+    authenticate(&state, &jar).await?;
     cookies: Cookies,
     Query(query): Query<PostListQuery>,
 ) -> ApiResult<Json<Vec<PostSummary>>> {
@@ -379,6 +420,7 @@ async fn list_posts(
 
 async fn create_comment(
     State(state): State<SharedState>,
+    jar: CookieJar,
     cookies: Cookies,
     Path(post_id): Path<i64>,
     Json(payload): Json<CreateCommentPayload>,
@@ -387,6 +429,7 @@ async fn create_comment(
         return Err(ApiError::Validation("内容不能为空".into()));
     }
 
+    let user = authenticate(&state, &jar).await?;
     let user = authenticate(&state, &cookies).await?;
     let now = now_iso();
     let anonymous = payload.anonymous.unwrap_or(false);
@@ -413,6 +456,10 @@ async fn create_comment(
 
 async fn get_post(
     State(state): State<SharedState>,
+    jar: CookieJar,
+    Path(post_id): Path<i64>,
+) -> ApiResult<Json<PostDetailResponse>> {
+    authenticate(&state, &jar).await?;
     cookies: Cookies,
     Path(post_id): Path<i64>,
 ) -> ApiResult<Json<PostDetailResponse>> {
@@ -424,6 +471,9 @@ async fn get_post(
 
 async fn list_my_posts(
     State(state): State<SharedState>,
+    jar: CookieJar,
+) -> ApiResult<Json<Vec<PostSummary>>> {
+    let user = authenticate(&state, &jar).await?;
     cookies: Cookies,
 ) -> ApiResult<Json<Vec<PostSummary>>> {
     let user = authenticate(&state, &cookies).await?;
@@ -433,6 +483,10 @@ async fn list_my_posts(
 
 async fn get_user_profile(
     State(state): State<SharedState>,
+    jar: CookieJar,
+    Path(uid): Path<String>,
+) -> ApiResult<Json<UserProfileResponse>> {
+    authenticate(&state, &jar).await?;
     cookies: Cookies,
     Path(uid): Path<String>,
 ) -> ApiResult<Json<UserProfileResponse>> {
@@ -450,6 +504,10 @@ async fn get_user_profile(
 
 async fn update_profile(
     State(state): State<SharedState>,
+    jar: CookieJar,
+    Json(payload): Json<UpdateProfilePayload>,
+) -> ApiResult<Json<UserResponse>> {
+    let mut user = authenticate(&state, &jar).await?;
     cookies: Cookies,
     Json(payload): Json<UpdateProfilePayload>,
 ) -> ApiResult<Json<UserResponse>> {
@@ -498,6 +556,7 @@ async fn update_profile(
 
 async fn change_password(
     State(state): State<SharedState>,
+    jar: CookieJar,
     cookies: Cookies,
     Json(payload): Json<ChangePasswordPayload>,
 ) -> ApiResult<Json<MessageResponse>> {
@@ -505,6 +564,7 @@ async fn change_password(
         return Err(ApiError::Validation("新密码至少需要6位".into()));
     }
 
+    let user = authenticate(&state, &jar).await?;
     let user = authenticate(&state, &cookies).await?;
     let current_hash: Option<String> =
         sqlx::query_scalar("SELECT password_hash FROM users WHERE id = ?1")
@@ -647,6 +707,10 @@ async fn ensure_column(
 
 async fn delete_post(
     State(state): State<SharedState>,
+    jar: CookieJar,
+    Path(post_id): Path<i64>,
+) -> ApiResult<Json<MessageResponse>> {
+    let user = authenticate(&state, &jar).await?;
     cookies: Cookies,
     Path(post_id): Path<i64>,
 ) -> ApiResult<Json<MessageResponse>> {
@@ -686,6 +750,8 @@ fn verify_password(hash: &str, password: &str) -> ApiResult<bool> {
     }
 }
 
+async fn authenticate(state: &SharedState, jar: &CookieJar) -> ApiResult<AuthedUser> {
+    let Some(cookie) = jar.get(SESSION_COOKIE) else {
 async fn authenticate(state: &SharedState, cookies: &Cookies) -> ApiResult<AuthedUser> {
     let Some(cookie) = cookies.get(SESSION_COOKIE) else {
         return Err(ApiError::Unauthorized);
