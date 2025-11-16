@@ -10,7 +10,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{delete, get, patch, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use rand_core::OsRng;
@@ -174,6 +174,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/admin/posts/:post_id", delete(delete_post))
         .with_state(state.clone());
 
+    let app = api_routes
     let app = Router::new()
         .merge(api_routes)
         .layer(CookieManagerLayer::new())
