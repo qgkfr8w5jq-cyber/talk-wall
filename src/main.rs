@@ -20,6 +20,7 @@ use sqlx::{FromRow, SqlitePool};
 use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
 use tokio::net::TcpListener;
+use tower_cookies::{Cookie, CookieManagerLayer, Cookies};
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -174,9 +175,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/admin/posts/:post_id", delete(delete_post))
         .with_state(state.clone());
 
+    let app = api_routes
     let app = Router::new()
         .merge(api_routes)
-        .layer(CookieLayer::new())
+        .layer(CookieManagerLayer::new())
         .fallback_service(static_service);
 
     let addr: SocketAddr = config.server.addr.parse()?;
@@ -237,6 +239,9 @@ async fn login(
     jar: CookieJar,
     Json(payload): Json<LoginPayload>,
 ) -> ApiResult<(CookieJar, Json<UserResponse>)> {
+    cookies: Cookies,
+    Json(payload): Json<LoginPayload>,
+) -> ApiResult<Json<UserResponse>> {
     let user = sqlx::query_as::<_, DbUser>(
         "SELECT id, uid, username, qq, password_hash FROM users WHERE username = ?1",
     )
@@ -282,6 +287,17 @@ async fn login(
             is_admin,
         }),
     ))
+    cookies.add(cookie);
+
+    let is_admin = state.config.is_admin(&user.uid);
+
+    Ok(Json(UserResponse {
+        id: user.id,
+        username: user.username,
+        qq: user.qq,
+        uid: user.uid,
+        is_admin,
+    }))
 }
 
 async fn logout(
@@ -290,6 +306,9 @@ async fn logout(
 ) -> ApiResult<(CookieJar, Json<MessageResponse>)> {
     let mut jar = jar;
     if let Some(cookie) = jar.get(SESSION_COOKIE) {
+    cookies: Cookies,
+) -> ApiResult<impl IntoResponse> {
+    if let Some(cookie) = cookies.get(SESSION_COOKIE) {
         let token = cookie.value().to_string();
         sqlx::query("DELETE FROM sessions WHERE id = ?1")
             .bind(&token)
@@ -311,6 +330,16 @@ async fn logout(
 
 async fn me(State(state): State<SharedState>, jar: CookieJar) -> ApiResult<Json<UserResponse>> {
     let user = authenticate(&state, &jar).await?;
+        cookies.remove(expired);
+    }
+
+    Ok(Json(MessageResponse {
+        message: "退出成功".into(),
+    }))
+}
+
+async fn me(State(state): State<SharedState>, cookies: Cookies) -> ApiResult<Json<UserResponse>> {
+    let user = authenticate(&state, &cookies).await?;
     let is_admin = state.config.is_admin(&user.uid);
     Ok(Json(UserResponse {
         id: user.id,
@@ -324,6 +353,7 @@ async fn me(State(state): State<SharedState>, jar: CookieJar) -> ApiResult<Json<
 async fn create_post(
     State(state): State<SharedState>,
     jar: CookieJar,
+    cookies: Cookies,
     Json(payload): Json<CreatePostPayload>,
 ) -> ApiResult<impl IntoResponse> {
     if payload.title.trim().is_empty() {
@@ -334,6 +364,7 @@ async fn create_post(
     }
 
     let user = authenticate(&state, &jar).await?;
+    let user = authenticate(&state, &cookies).await?;
     let now = now_iso();
     let anonymous = payload.anonymous.unwrap_or(false);
     let category = normalize_post_category(payload.category)?;
@@ -365,6 +396,10 @@ async fn list_posts(
     Query(query): Query<PostListQuery>,
 ) -> ApiResult<Json<Vec<PostSummary>>> {
     authenticate(&state, &jar).await?;
+    cookies: Cookies,
+    Query(query): Query<PostListQuery>,
+) -> ApiResult<Json<Vec<PostSummary>>> {
+    authenticate(&state, &cookies).await?;
     let category_filter = normalize_query_category(query.category)?;
 
     let posts = sqlx::query_as::<_, DbPost>(
@@ -386,6 +421,7 @@ async fn list_posts(
 async fn create_comment(
     State(state): State<SharedState>,
     jar: CookieJar,
+    cookies: Cookies,
     Path(post_id): Path<i64>,
     Json(payload): Json<CreateCommentPayload>,
 ) -> ApiResult<impl IntoResponse> {
@@ -394,6 +430,7 @@ async fn create_comment(
     }
 
     let user = authenticate(&state, &jar).await?;
+    let user = authenticate(&state, &cookies).await?;
     let now = now_iso();
     let anonymous = payload.anonymous.unwrap_or(false);
 
@@ -423,6 +460,10 @@ async fn get_post(
     Path(post_id): Path<i64>,
 ) -> ApiResult<Json<PostDetailResponse>> {
     authenticate(&state, &jar).await?;
+    cookies: Cookies,
+    Path(post_id): Path<i64>,
+) -> ApiResult<Json<PostDetailResponse>> {
+    authenticate(&state, &cookies).await?;
     let post = load_post(&state, post_id).await?;
     let comments = fetch_comments(&state, post.id).await?;
     Ok(Json(PostDetailResponse::from_parts(post, comments)))
@@ -433,6 +474,9 @@ async fn list_my_posts(
     jar: CookieJar,
 ) -> ApiResult<Json<Vec<PostSummary>>> {
     let user = authenticate(&state, &jar).await?;
+    cookies: Cookies,
+) -> ApiResult<Json<Vec<PostSummary>>> {
+    let user = authenticate(&state, &cookies).await?;
     let posts = fetch_posts_for_user(&state, user.id, true).await?;
     Ok(Json(posts))
 }
@@ -443,6 +487,10 @@ async fn get_user_profile(
     Path(uid): Path<String>,
 ) -> ApiResult<Json<UserProfileResponse>> {
     authenticate(&state, &jar).await?;
+    cookies: Cookies,
+    Path(uid): Path<String>,
+) -> ApiResult<Json<UserProfileResponse>> {
+    authenticate(&state, &cookies).await?;
     let user = find_user_by_uid(&state, &uid).await?;
     let posts = fetch_posts_for_user(&state, user.id, false).await?;
     Ok(Json(UserProfileResponse {
@@ -460,6 +508,10 @@ async fn update_profile(
     Json(payload): Json<UpdateProfilePayload>,
 ) -> ApiResult<Json<UserResponse>> {
     let mut user = authenticate(&state, &jar).await?;
+    cookies: Cookies,
+    Json(payload): Json<UpdateProfilePayload>,
+) -> ApiResult<Json<UserResponse>> {
+    let mut user = authenticate(&state, &cookies).await?;
     let new_username = payload
         .username
         .map(|v| v.trim().to_string())
@@ -505,6 +557,7 @@ async fn update_profile(
 async fn change_password(
     State(state): State<SharedState>,
     jar: CookieJar,
+    cookies: Cookies,
     Json(payload): Json<ChangePasswordPayload>,
 ) -> ApiResult<Json<MessageResponse>> {
     if payload.new_password.len() < 6 {
@@ -512,6 +565,7 @@ async fn change_password(
     }
 
     let user = authenticate(&state, &jar).await?;
+    let user = authenticate(&state, &cookies).await?;
     let current_hash: Option<String> =
         sqlx::query_scalar("SELECT password_hash FROM users WHERE id = ?1")
             .bind(user.id)
@@ -657,6 +711,10 @@ async fn delete_post(
     Path(post_id): Path<i64>,
 ) -> ApiResult<Json<MessageResponse>> {
     let user = authenticate(&state, &jar).await?;
+    cookies: Cookies,
+    Path(post_id): Path<i64>,
+) -> ApiResult<Json<MessageResponse>> {
+    let user = authenticate(&state, &cookies).await?;
     if !state.config.is_admin(&user.uid) {
         return Err(ApiError::Forbidden);
     }
@@ -694,6 +752,8 @@ fn verify_password(hash: &str, password: &str) -> ApiResult<bool> {
 
 async fn authenticate(state: &SharedState, jar: &CookieJar) -> ApiResult<AuthedUser> {
     let Some(cookie) = jar.get(SESSION_COOKIE) else {
+async fn authenticate(state: &SharedState, cookies: &Cookies) -> ApiResult<AuthedUser> {
+    let Some(cookie) = cookies.get(SESSION_COOKIE) else {
         return Err(ApiError::Unauthorized);
     };
     let token = cookie.value().to_string();
