@@ -1,4 +1,4 @@
-use std::{fs, net::SocketAddr, sync::Arc};
+use std::{fs, net::SocketAddr, path::PathBuf, sync::Arc};
 
 use argon2::{
     password_hash::{
@@ -7,9 +7,8 @@ use argon2::{
     Argon2,
 };
 use axum::{
-    body::Body,
     extract::{Path, Query, State},
-    http::{header::CONTENT_TYPE, Request, StatusCode, Uri},
+    http::StatusCode,
     response::{IntoResponse, Response},
     routing::{delete, get, patch, post},
     Json, Router,
@@ -19,10 +18,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, SqlitePool};
 use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
-use tokio::{fs as tokio_fs, net::TcpListener};
-use tower::ServiceExt;
+use tokio::net::TcpListener;
 use tower_cookies::{Cookie, CookieManagerLayer, Cookies};
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
@@ -32,9 +30,10 @@ const SESSION_TTL_DAYS: i64 = 7;
 const CATEGORIES: [&str; 5] = ["扩列", "吐槽", "表白", "提问", "其它"];
 const LATEST_CATEGORY: &str = "最新";
 const DEFAULT_CATEGORY: &str = "其它";
+const STATIC_DIR: &str = "frontend/dist";
 
 type SharedState = Arc<AppState>;
-type ApiResult<T> = Result<T, ApiError>;
+type ApiResult<T> = std::result::Result<T, ApiError>;
 
 #[derive(Clone)]
 struct AppState {
@@ -89,10 +88,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config: config.clone(),
     });
 
-    let static_dir = "frontend/dist";
-    if fs::metadata(static_dir).is_err() {
-        warn!("{static_dir} 不存在，运行 `npm install && npm run build` 以构建 Svelte 前端");
+    if fs::metadata(STATIC_DIR).is_err() {
+        warn!("{STATIC_DIR} 不存在，运行 `npm install && npm run build` 以构建 Svelte 前端");
     }
+
+    let static_service = ServeDir::new(STATIC_DIR)
+        .not_found_service(ServeFile::new(PathBuf::from(STATIC_DIR).join("index.html")));
 
     let app = Router::new()
         .route("/api/register", post(register))
@@ -108,7 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/admin/posts/:post_id", delete(delete_post))
         .with_state(state)
         .layer(CookieManagerLayer::new())
-        .fallback(static_handler);
+        .fallback_service(static_service);
 
     let addr: SocketAddr = config.server.addr.parse()?;
     let listener = TcpListener::bind(addr).await?;
@@ -597,42 +598,6 @@ async fn delete_post(
     Ok(Json(MessageResponse {
         message: "帖子已删除".into(),
     }))
-}
-
-async fn static_handler(uri: Uri) -> Response {
-    let req = Request::builder().uri(uri).body(Body::empty()).unwrap();
-
-    match ServeDir::new("frontend/dist").oneshot(req).await {
-        Ok(res) => {
-            if res.status() == StatusCode::NOT_FOUND {
-                serve_index().await
-            } else {
-                res
-            }
-        }
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("静态资源加载失败: {err}"),
-        )
-            .into_response(),
-    }
-}
-
-async fn serve_index() -> Response {
-    match tokio_fs::read("frontend/dist/index.html").await {
-        Ok(bytes) => Response::builder()
-            .status(StatusCode::OK)
-            .header(CONTENT_TYPE, "text/html; charset=utf-8")
-            .body(Body::from(bytes))
-            .unwrap_or_else(|err| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("响应构建失败: {err}"),
-                )
-                    .into_response()
-            }),
-        Err(err) => (StatusCode::NOT_FOUND, format!("静态资源不存在: {err}")).into_response(),
-    }
 }
 
 fn hash_password(password: &str) -> ApiResult<String> {
