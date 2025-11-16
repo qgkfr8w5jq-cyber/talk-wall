@@ -1,3 +1,4 @@
+use std::{fs, net::SocketAddr, path::PathBuf, sync::Arc};
 use std::{fs, net::SocketAddr, sync::Arc};
 
 use argon2::{
@@ -7,6 +8,8 @@ use argon2::{
     Argon2,
 };
 use axum::{
+    extract::{Path, Query, State},
+    http::StatusCode,
     body::Body,
     extract::{Path, Query, State},
     http::{header::CONTENT_TYPE, Request, StatusCode, Uri},
@@ -19,6 +22,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, SqlitePool};
 use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
+use tokio::net::TcpListener;
+use tower_cookies::{Cookie, CookieManagerLayer, Cookies};
+use tower_http::services::{ServeDir, ServeFile};
 use tokio::fs as tokio_fs;
 use tower::ServiceExt;
 use tower_cookies::{Cookie, CookieManagerLayer, Cookies};
@@ -32,6 +38,11 @@ const SESSION_TTL_DAYS: i64 = 7;
 const CATEGORIES: [&str; 5] = ["扩列", "吐槽", "表白", "提问", "其它"];
 const LATEST_CATEGORY: &str = "最新";
 const DEFAULT_CATEGORY: &str = "其它";
+const STATIC_DIR: &str = "frontend/dist";
+const FRONTEND_ENTRY: &str = "index.html";
+
+type SharedState = Arc<AppState>;
+type ApiResult<T> = std::result::Result<T, ApiError>;
 
 type SharedState = Arc<AppState>;
 type ApiResult<T> = Result<T, ApiError>;
@@ -89,6 +100,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config: config.clone(),
     });
 
+    if fs::metadata(STATIC_DIR).is_err() {
+        warn!("{STATIC_DIR} 不存在，运行 `npm install && npm run build` 以构建 Svelte 前端");
+    } else {
+        let entry = PathBuf::from(STATIC_DIR).join(FRONTEND_ENTRY);
+        if fs::metadata(&entry).is_err() {
+            warn!(
+                "未找到 {}，请确认 `npm run build` 是否成功并输出入口文件",
+                entry.display()
+            );
+        }
+    }
+
+    let static_service = ServeDir::new(STATIC_DIR).not_found_service(ServeFile::new(
+        PathBuf::from(STATIC_DIR).join(FRONTEND_ENTRY),
+    ));
+
     let static_dir = "frontend/dist";
     if fs::metadata(static_dir).is_err() {
         warn!("{static_dir} 不存在，运行 `npm install && npm run build` 以构建 Svelte 前端");
@@ -108,6 +135,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/admin/posts/:post_id", delete(delete_post))
         .with_state(state)
         .layer(CookieManagerLayer::new())
+        .fallback_service(static_service);
+
+    let addr: SocketAddr = config.server.addr.parse()?;
+    let listener = TcpListener::bind(addr).await?;
+    info!("listening on {}", listener.local_addr()?);
+    axum::serve(listener, app).await?;
         .fallback(static_handler);
 
     let addr: SocketAddr = config.server.addr.parse()?;
