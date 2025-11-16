@@ -7,10 +7,11 @@ use argon2::{
     Argon2,
 };
 use axum::{
+    body::Body,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header::CONTENT_TYPE, Request, StatusCode, Uri},
     response::{IntoResponse, Response},
-    routing::{delete, get, get_service, patch, post},
+    routing::{delete, get, patch, post},
     Json, Router,
 };
 use rand_core::OsRng;
@@ -18,6 +19,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, SqlitePool};
 use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
+use tokio::fs as tokio_fs;
+use tower::ServiceExt;
 use tower_cookies::{Cookie, CookieManagerLayer, Cookies};
 use tower_http::services::ServeDir;
 use tracing::{info, warn};
@@ -31,6 +34,7 @@ const LATEST_CATEGORY: &str = "最新";
 const DEFAULT_CATEGORY: &str = "其它";
 
 type SharedState = Arc<AppState>;
+type ApiResult<T> = Result<T, ApiError>;
 
 #[derive(Clone)]
 struct AppState {
@@ -90,14 +94,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         warn!("{static_dir} 不存在，运行 `npm install && npm run build` 以构建 Svelte 前端");
     }
 
-    let static_service =
-        get_service(ServeDir::new(static_dir)).handle_error(|err: std::io::Error| async move {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("静态资源加载失败: {err}"),
-            )
-        });
-
     let app = Router::new()
         .route("/api/register", post(register))
         .route("/api/login", post(login))
@@ -112,7 +108,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/admin/posts/:post_id", delete(delete_post))
         .with_state(state)
         .layer(CookieManagerLayer::new())
-        .fallback_service(static_service);
+        .fallback(static_handler);
 
     let addr: SocketAddr = config.server.addr.parse()?;
     info!("listening on {addr}");
@@ -604,20 +600,56 @@ async fn delete_post(
     }))
 }
 
-fn hash_password(password: &str) -> Result<String, ApiError> {
+async fn static_handler(uri: Uri) -> Response {
+    let req = Request::builder().uri(uri).body(Body::empty()).unwrap();
+
+    match ServeDir::new("frontend/dist").oneshot(req).await {
+        Ok(res) => {
+            if res.status() == StatusCode::NOT_FOUND {
+                serve_index().await
+            } else {
+                res
+            }
+        }
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("静态资源加载失败: {err}"),
+        )
+            .into_response(),
+    }
+}
+
+async fn serve_index() -> Response {
+    match tokio_fs::read("frontend/dist/index.html").await {
+        Ok(bytes) => Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, "text/html; charset=utf-8")
+            .body(Body::from(bytes))
+            .unwrap_or_else(|err| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("响应构建失败: {err}"),
+                )
+                    .into_response()
+            }),
+        Err(err) => (StatusCode::NOT_FOUND, format!("静态资源不存在: {err}")).into_response(),
+    }
+}
+
+fn hash_password(password: &str) -> ApiResult<String> {
     let salt = SaltString::generate(&mut OsRng);
     Argon2::default()
         .hash_password(password.as_bytes(), &salt)
         .map(|hash| hash.to_string())
-        .map_err(ApiError::PasswordHash)
+        .map_err(ApiError::from)
 }
 
-fn verify_password(hash: &str, password: &str) -> Result<bool, ApiError> {
-    let parsed = PasswordHash::new(hash).map_err(ApiError::PasswordHash)?;
+fn verify_password(hash: &str, password: &str) -> ApiResult<bool> {
+    let parsed = PasswordHash::new(hash).map_err(ApiError::from)?;
     match Argon2::default().verify_password(password.as_bytes(), &parsed) {
         Ok(_) => Ok(true),
         Err(PasswordHashError::Password) => Ok(false),
-        Err(err) => Err(ApiError::PasswordHash(err)),
+        Err(err) => Err(ApiError::from(err)),
     }
 }
 
@@ -754,9 +786,15 @@ enum ApiError {
     #[error("资源不存在")]
     NotFound,
     #[error("密码处理失败: {0}")]
-    PasswordHash(#[from] PasswordHashError),
+    PasswordHash(String),
     #[error("服务器内部错误: {0}")]
     Internal(String),
+}
+
+impl From<PasswordHashError> for ApiError {
+    fn from(err: PasswordHashError) -> Self {
+        ApiError::PasswordHash(err.to_string())
+    }
 }
 
 impl IntoResponse for ApiError {
