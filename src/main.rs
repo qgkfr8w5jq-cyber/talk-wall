@@ -31,6 +31,7 @@ const CATEGORIES: [&str; 5] = ["扩列", "吐槽", "表白", "提问", "其它"]
 const LATEST_CATEGORY: &str = "最新";
 const DEFAULT_CATEGORY: &str = "其它";
 const STATIC_DIR: &str = "frontend/dist";
+const FRONTEND_ENTRY: &str = "index.html";
 
 type SharedState = Arc<AppState>;
 type ApiResult<T> = std::result::Result<T, ApiError>;
@@ -90,10 +91,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if fs::metadata(STATIC_DIR).is_err() {
         warn!("{STATIC_DIR} 不存在，运行 `npm install && npm run build` 以构建 Svelte 前端");
+    } else {
+        let entry = PathBuf::from(STATIC_DIR).join(FRONTEND_ENTRY);
+        if fs::metadata(&entry).is_err() {
+            warn!(
+                "未找到 {}，请确认 `npm run build` 是否成功并输出入口文件",
+                entry.display()
+            );
+        }
     }
 
-    let static_service = ServeDir::new(STATIC_DIR)
-        .not_found_service(ServeFile::new(PathBuf::from(STATIC_DIR).join("index.html")));
+    let static_service = ServeDir::new(STATIC_DIR).not_found_service(ServeFile::new(
+        PathBuf::from(STATIC_DIR).join(FRONTEND_ENTRY),
+    ));
 
     let app = Router::new()
         .route("/api/register", post(register))
