@@ -1,5 +1,4 @@
 use std::{fs, net::SocketAddr, path::PathBuf, sync::Arc};
-use std::{fs, net::SocketAddr, sync::Arc};
 
 use argon2::{
     password_hash::{
@@ -10,9 +9,6 @@ use argon2::{
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    body::Body,
-    extract::{Path, Query, State},
-    http::{header::CONTENT_TYPE, Request, StatusCode, Uri},
     response::{IntoResponse, Response},
     routing::{delete, get, patch, post},
     Json, Router,
@@ -25,10 +21,6 @@ use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
 use tokio::net::TcpListener;
 use tower_cookies::{Cookie, CookieManagerLayer, Cookies};
 use tower_http::services::{ServeDir, ServeFile};
-use tokio::fs as tokio_fs;
-use tower::ServiceExt;
-use tower_cookies::{Cookie, CookieManagerLayer, Cookies};
-use tower_http::services::ServeDir;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
@@ -41,11 +33,63 @@ const DEFAULT_CATEGORY: &str = "其它";
 const STATIC_DIR: &str = "frontend/dist";
 const FRONTEND_ENTRY: &str = "index.html";
 
-type SharedState = Arc<AppState>;
-type ApiResult<T> = std::result::Result<T, ApiError>;
+#[derive(Debug, Error)]
+enum ApiError {
+    #[error("数据库错误: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("未授权")]
+    Unauthorized,
+    #[error("禁止访问")]
+    Forbidden,
+    #[error("请求参数错误: {0}")]
+    Validation(String),
+    #[error("冲突: {0}")]
+    Conflict(String),
+    #[error("资源不存在")]
+    NotFound,
+    #[error("密码处理失败: {0}")]
+    PasswordHash(String),
+    #[error("服务器内部错误: {0}")]
+    Internal(String),
+}
+
+impl From<PasswordHashError> for ApiError {
+    fn from(err: PasswordHashError) -> Self {
+        ApiError::PasswordHash(err.to_string())
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        let status = match self {
+            ApiError::Validation(_) => StatusCode::BAD_REQUEST,
+            ApiError::Unauthorized => StatusCode::UNAUTHORIZED,
+            ApiError::Conflict(_) => StatusCode::CONFLICT,
+            ApiError::Forbidden => StatusCode::FORBIDDEN,
+            ApiError::NotFound => StatusCode::NOT_FOUND,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+
+        let body = Json(ErrorResponse {
+            message: self.to_string(),
+        });
+
+        (status, body).into_response()
+    }
+}
+
+#[derive(Serialize)]
+struct ErrorResponse {
+    message: String,
+}
+
+#[derive(Serialize)]
+struct MessageResponse {
+    message: String,
+}
 
 type SharedState = Arc<AppState>;
-type ApiResult<T> = Result<T, ApiError>;
+type ApiResult<T> = std::result::Result<T, ApiError>;
 
 #[derive(Clone)]
 struct AppState {
@@ -116,12 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         PathBuf::from(STATIC_DIR).join(FRONTEND_ENTRY),
     ));
 
-    let static_dir = "frontend/dist";
-    if fs::metadata(static_dir).is_err() {
-        warn!("{static_dir} 不存在，运行 `npm install && npm run build` 以构建 Svelte 前端");
-    }
-
-    let app = Router::new()
+    let api_routes = Router::new()
         .route("/api/register", post(register))
         .route("/api/login", post(login))
         .route("/api/logout", post(logout))
@@ -133,7 +172,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/posts/:post_id", get(get_post))
         .route("/api/posts/:post_id/comments", post(create_comment))
         .route("/api/admin/posts/:post_id", delete(delete_post))
-        .with_state(state)
+        .with_state(state.clone());
+
+    let app = Router::new()
+        .merge(api_routes)
         .layer(CookieManagerLayer::new())
         .fallback_service(static_service);
 
@@ -141,13 +183,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(addr).await?;
     info!("listening on {}", listener.local_addr()?);
     axum::serve(listener, app).await?;
-        .fallback(static_handler);
-
-    let addr: SocketAddr = config.server.addr.parse()?;
-    info!("listening on {addr}");
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service())
-        .await?;
 
     Ok(())
 }
@@ -633,42 +668,6 @@ async fn delete_post(
     }))
 }
 
-async fn static_handler(uri: Uri) -> Response {
-    let req = Request::builder().uri(uri).body(Body::empty()).unwrap();
-
-    match ServeDir::new("frontend/dist").oneshot(req).await {
-        Ok(res) => {
-            if res.status() == StatusCode::NOT_FOUND {
-                serve_index().await
-            } else {
-                res
-            }
-        }
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("静态资源加载失败: {err}"),
-        )
-            .into_response(),
-    }
-}
-
-async fn serve_index() -> Response {
-    match tokio_fs::read("frontend/dist/index.html").await {
-        Ok(bytes) => Response::builder()
-            .status(StatusCode::OK)
-            .header(CONTENT_TYPE, "text/html; charset=utf-8")
-            .body(Body::from(bytes))
-            .unwrap_or_else(|err| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("响应构建失败: {err}"),
-                )
-                    .into_response()
-            }),
-        Err(err) => (StatusCode::NOT_FOUND, format!("静态资源不存在: {err}")).into_response(),
-    }
-}
-
 fn hash_password(password: &str) -> ApiResult<String> {
     let salt = SaltString::generate(&mut OsRng);
     Argon2::default()
@@ -803,62 +802,6 @@ fn is_unique_violation(err: &sqlx::Error) -> bool {
     }
     false
 }
-
-#[derive(Debug, Error)]
-enum ApiError {
-    #[error("数据库错误: {0}")]
-    Database(#[from] sqlx::Error),
-    #[error("未授权")]
-    Unauthorized,
-    #[error("禁止访问")]
-    Forbidden,
-    #[error("请求参数错误: {0}")]
-    Validation(String),
-    #[error("冲突: {0}")]
-    Conflict(String),
-    #[error("资源不存在")]
-    NotFound,
-    #[error("密码处理失败: {0}")]
-    PasswordHash(String),
-    #[error("服务器内部错误: {0}")]
-    Internal(String),
-}
-
-impl From<PasswordHashError> for ApiError {
-    fn from(err: PasswordHashError) -> Self {
-        ApiError::PasswordHash(err.to_string())
-    }
-}
-
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        let status = match self {
-            ApiError::Validation(_) => StatusCode::BAD_REQUEST,
-            ApiError::Unauthorized => StatusCode::UNAUTHORIZED,
-            ApiError::Conflict(_) => StatusCode::CONFLICT,
-            ApiError::Forbidden => StatusCode::FORBIDDEN,
-            ApiError::NotFound => StatusCode::NOT_FOUND,
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
-        };
-
-        let body = Json(ErrorResponse {
-            message: self.to_string(),
-        });
-
-        (status, body).into_response()
-    }
-}
-
-#[derive(Serialize)]
-struct ErrorResponse {
-    message: String,
-}
-
-#[derive(Serialize)]
-struct MessageResponse {
-    message: String,
-}
-
 #[derive(Deserialize)]
 struct RegisterPayload {
     username: String,
